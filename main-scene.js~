@@ -1,0 +1,1084 @@
+class Particle
+{
+    constructor(position, texture, lifeTime, timeAlive)
+    {
+        this.position = position;
+        this.texture = texture;
+        this.lifeTime = lifeTime;
+        this.timeAlive = timeAlive;
+    }
+
+    translatePart(transX, transY, transZ)
+    {
+        this.position.times(Mat4.translation(Vec.of(transX, transY, transZ)));
+    }
+}
+
+class Rocket_Simulation extends Scene_Component {
+     // The scene begins by requesting the camera, shapes, and materials it will need.
+    constructor(context, control_box) {
+        super(context, control_box);
+
+        // First, include a secondary Scene that provides movement controls:
+        if(!context.globals.has_controls)
+            context.register_scene_component(new Movement_Controls(context, control_box.parentElement.insertCell()));
+
+        // Locate the camera here (inverted matrix).
+        const r = context.width / context.height;
+        context.globals.graphics_state.camera_transform = Mat4.translation([0, -3, -45]);
+        context.globals.graphics_state.projection_transform = Mat4.perspective(Math.PI / 4, r, .1, 1000);
+
+        // At the beginning of our program, load one of each of these shape
+        // definitions onto the GPU.  NOTE:  Only do this ONCE per shape
+        // design.  Once you've told the GPU what the design of a cube is,
+        // it would be redundant to tell it again.  You should just re-use
+        // the one called "box" more than once in display() to draw
+        // multiple cubes.  Don't define more than one blueprint for the
+        // same thing here.
+        const shapes = {
+            'square': new Square(),
+            'circle': new Circle(50),
+            'ball': new Subdivision_Sphere(10),
+            'box': new Cube(),
+            'cylinder': new Cylinder(50),
+            'cone': new Cone(50),
+            'prism': new TriangularPrism(),
+            'myShape': new myShape(75),
+            'myShapeTwo': new myShapeTwo(50)
+        }
+        this.submit_shapes(context, shapes);
+        this.shape_count = Object.keys(shapes).length;
+
+        // Make some Material objects available to you:
+        this.clay = context.get_instance(Phong_Shader).material(Color.of(.9, .5, .9, 1), {
+            ambient: .4,
+            diffusivity: .4
+        });
+        this.plastic = this.clay.override({
+            specularity: .6
+        });
+        this.texture_base = context.get_instance(Phong_Shader).material(Color.of(0, 0, 0, 1), {
+            ambient: 1,
+            diffusivity: 0.4,
+            specularity: 0.3
+        });
+
+        // Load some textures for the demo shapes
+        this.shape_materials = {};
+        const shape_textures = {
+            metal: "assets/dirtyWhite.png",
+            sky: "assets/gradient_sky3.jpg",
+            grass: "assets/grass.jpg",
+            launch: "assets/launch.jpg",
+            crate: "assets/metal_crate.png",
+            zero: "assets/zero.png",
+            one: "assets/one.png",
+            two: "assets/two.png",
+            three: "assets/three.png",
+            four: "assets/four.png",
+            five: "assets/five.png",
+            moonDistant: "assets/moon.png",
+            rocketSide: "assets/rocketSide.png",
+            metalStripes: "assets/metal_stripe.jpg",
+            gold: "assets/gold.png",
+            earth: "assets/earth.jpg",
+            moon: "assets/moon2.jpeg",
+            end: "assets/end.png",
+            text: "assets/text.png",
+            smoke: "assets/smoke.png",
+            fire: "assets/fire.png"
+        };
+        for (let t in shape_textures)
+            this.shape_materials[t] = this.texture_base.override({
+                texture: context.get_instance(shape_textures[t])
+            });
+        
+        this.lights = [new Light(Vec.of(10, 10, 20, 1), Color.of(1, 1, 1, 1), 100000)];
+
+        this.t = 0;
+
+        this.white = Color.of(1, 1, 1, 1);
+        this.black = Color.of(0, 0, 0, 1);
+        
+        this.particles1 = [];
+        this.particles2 = [];
+        this.particles3 = [];
+        this.particles4 = [];
+        this.numParticles = 10;
+        /*
+        for(let i = 0; i < this.numParticles; i++)
+        {
+            this.particles1.push(new Particle(Mat4.identity().times(Mat4.translation(Vec.of(Math.random() * 2 - 1, Math.random() * 0.5 - 9, Math.random() * 2 - 1))).times(Mat4.scale(0.5)), this.plastic.override({color: this.black}), 1, 0));
+            this.particles2.push(new Particle(Mat4.identity().times(Mat4.translation(Vec.of(Math.random() * 1.5 - 0.75, Math.random() * 0.5 - 9.5, Math.random() * 1.5 - 0.75))).times(Mat4.scale(0.5)), this.plastic.override({color: this.black}), 1, 0));
+            this.particles3.push(new Particle(Mat4.identity().times(Mat4.translation(Vec.of(Math.random() * 1 - 0.5, Math.random() * 0.5 - 10, Math.random() * 1 - 0.5))).times(Mat4.scale(0.5)), this.plastic.override({color: this.black}), 1, 0));
+            this.particles4.push(new Particle(Mat4.identity().times(Mat4.translation(Vec.of(Math.random() * 0.5 - 0.25, Math.random() * 0.5 - 10.5, Math.random() * 0.5 - 0.25))).times(Mat4.scale(0.5)), this.plastic.override({color: this.black}), 1, 0));
+        }
+        */
+    }
+    
+
+
+    // Draw the scene's buttons, setup their actions and keyboard shortcuts, and monitor live measurements.
+    make_control_panel() {
+        this.key_triggered_button("Start Launch Sequence", ["l"], () => {
+            this.start = true;
+        });
+        
+        this.key_triggered_button("Time Speed Up", ["t"], () => {
+            this.timeBool = true;
+        });
+
+        this.key_triggered_button("Pause Time", ["n"], () => {
+            this.paused = !this.paused;
+        });
+    }
+
+displayParticles(graphics_state, x, y, z, rotate, t)
+    {
+        for(let i = 0; i < this.numParticles; i++)
+        {
+            if(!this.paused)
+            {
+                var rand1x = Math.random();
+                var rand1y = Math.random();
+                var rand1z = Math.random();
+                
+                var rand2x = Math.random();
+                var rand2y = Math.random();
+                var rand2z = Math.random();
+
+                var rand3x = Math.random();
+                var rand3y = Math.random();
+                var rand3z = Math.random();
+
+                var rand4x = Math.random();
+                var rand4y = Math.random();
+                var rand4z = Math.random();
+
+
+
+                this.particles1[i] = new Particle(Mat4.identity().times(Mat4.translation(Vec.of(x, y, z)))
+                                                                 .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+                                                                 .times(Mat4.translation(Vec.of(rand1x * 2 - 1, rand1y * 0.5 - 9, rand1z * 2 - 1)))
+                                                                 .times(Mat4.scale(0.5)), 
+                                                                 this.plastic.override({color: this.white}), 1, 0);
+                this.particles2[i] = new Particle(Mat4.identity().times(Mat4.translation(Vec.of(x, y, z)))
+                                                                 .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+                                                                 .times(Mat4.translation(Vec.of(rand2x * 1.5 - 0.75 + x, rand2y * 0.5 - 9.5 + y, rand2z * 1.5 - 0.75 + z)))
+                                                                 .times(Mat4.scale(0.5)), 
+                                                                 this.plastic.override({color: this.white}), 1, 0);
+                this.particles3[i] = new Particle(Mat4.identity().times(Mat4.translation(Vec.of(x, y, z)))
+                                                                 .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+                                                                 .times(Mat4.translation(Vec.of(rand3x * 1 - 0.5 + x, rand3y * 0.5 - 10 + y, rand3z * 1 - 0.5 + z)))
+                                                                 .times(Mat4.scale(0.5)), 
+                                                                 this.plastic.override({color: this.white}), 1, 0);
+                this.particles4[i] = new Particle(Mat4.identity().times(Mat4.translation(Vec.of(x, y, z)))
+                                                                 .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+                                                                 .times(Mat4.translation(Vec.of(rand4x * 0.5 - 0.25 + x, rand4y * 0.5 - 10.5 + y, rand4z * 0.5 - 0.25 + z)))
+                                                                 .times(Mat4.scale(0.5)), 
+                                                                 this.plastic.override({color: this.white}), 1, 0);
+                this.shapes.ball.draw(
+                graphics_state,
+                this.particles1[i].position,
+                this.particles1[i].texture
+                );
+                this.shapes.ball.draw(
+                graphics_state,
+                this.particles2[i].position,
+                this.particles2[i].texture
+                );
+                this.shapes.ball.draw(
+                graphics_state,
+                this.particles3[i].position,
+                this.particles3[i].texture
+                );
+                this.shapes.ball.draw(
+                graphics_state,
+                this.particles4[i].position,
+                this.particles4[i].texture
+                );
+                
+            }
+            else
+            {
+                this.shapes.ball.draw(
+                graphics_state,
+                this.particles1[i].position,
+                this.particles1[i].texture
+                ); 
+                this.shapes.ball.draw(
+                graphics_state,
+                this.particles2[i].position,
+                this.particles2[i].texture
+                );
+                this.shapes.ball.draw(
+                graphics_state,
+                this.particles3[i].position,
+                this.particles3[i].texture
+                ); 
+                this.shapes.ball.draw(
+                graphics_state,
+                this.particles4[i].position,
+                this.particles4[i].texture
+                ); 
+            }
+        }
+    }
+
+     build_rocket(graphics_state, translateMult, rotateMult, straightMult, breakMult, t, translateSub, rotateSub, straightSub, breakSub) {
+        let m = Mat4.identity();
+
+        var translateY = 0;
+        if(translateMult == 1)
+        {
+            translateY = translateMult * (1200 / (1 + Math.exp(-1/2 * ((t - translateSub) - 20)))) - .045;
+        }
+
+        var translateX = 0;
+        
+        if(translateMult == 1)
+        {
+            translateX = translateMult * (1000 / (1 + Math.exp(-1/2 * ((t - translateSub) - 27))));
+        }
+       
+        var firstBreak = 0;
+        
+        if(t > breakSub + 2)
+        {
+            firstBreak = 15 * (t - (breakSub + 2));
+        }
+
+        var secondBreak = 0;
+        if(t > 60.75)
+        {
+            secondBreak = 2 * (t - 60.75) * (t -60.25);
+        }
+
+        var rotate = 0;
+        if(rotateMult == 1)
+        {
+            rotate = Math.atan((500*Math.exp(-1/2 * ((t - rotateSub) - 27)))/Math.pow((1 + Math.exp(-1/2 * ((t - rotateSub) - 27))), 2));
+        }
+
+        if(straightMult == 1)
+        {
+            rotate = Math.PI/2;
+            translateX = 960 + 10*(t - straightSub);
+        }
+
+        if(t > 60)
+        {
+            translateX = 960 + 20*(t + 22 - 60);
+        }
+
+        if(t > 67.5)
+        {
+            translateX = 1460 + 20*(t + 22 - 60);
+        }
+
+
+        var roverSlowdown;
+        if(t > 64.5)
+        {
+            roverSlowdown = 15*(t - 64.5) + (10 / (1 + Math.exp(-1/1.15 * ((t - 64.5) - 12))));
+        }
+        else 
+        {
+            roverSlowdown = 0;
+        }
+
+        var translateZ = 0;
+        
+        if(t >= 68)
+        {
+            translateZ = (750 / (1 + Math.exp(-1/1.15 * ((t - 68) - 12))));
+        }
+
+        if(t >= 80)
+        {
+            translateX = 2300;
+            roverSlowdown = 242.045;
+        }
+
+        if(t > 88)
+        {
+            translateZ = 749.315;
+        }
+
+        var endCam = 0;
+        if(t < rotateSub - 2)
+        {
+            //graphics_state.camera_transform = Mat4.look_at(Vec.of(0, 20, 50), Vec.of(0, 0, 0), Vec.of(0,1,0));
+        }
+        else if(t < rotateSub + 2.85)
+        {
+            //graphics_state.camera_transform = Mat4.look_at(Vec.of(0, 20, 12), Vec.of(0, 20, 0), Vec.of(0,1,0));
+        }
+        else if(rotateMult == 1 && straightMult == 0)
+        {
+            graphics_state.camera_transform = Mat4.look_at(Vec.of(translateX, 4+translateY + 2, 55), Vec.of(translateX, translateY, 1), Vec.of(0,1,0));
+        }
+        else if(straightMult == 1 && t < 42)
+        {
+            graphics_state.camera_transform = Mat4.look_at(Vec.of(translateX - 40, 4+translateY+15, -5), Vec.of(translateX + 20, translateY, -5), Vec.of(0,1,0));
+        }
+        else if(t < 48)
+        {
+            graphics_state.camera_transform = Mat4.look_at(Vec.of(translateX, 4+translateY + 2, 55), Vec.of(translateX, translateY, 1), Vec.of(0,1,0));
+        }
+        else if(t < 56.5)
+        {
+            graphics_state.camera_transform = Mat4.look_at(Vec.of(translateX+15, 4+translateY + 2, 25), Vec.of(translateX+15, translateY, 1), Vec.of(0,1,0));
+        }
+        else if(t < 61.5)
+        {
+            graphics_state.camera_transform = Mat4.look_at(Vec.of(translateX+27, translateY, 8), Vec.of(translateX, translateY, -5), Vec.of(0,1,0));
+        }
+        else if(t < 67.5)
+        {
+            graphics_state.camera_transform = Mat4.look_at(Vec.of(translateX+7.5-roverSlowdown, translateY, 25), Vec.of(translateX+7.5-roverSlowdown, translateY, 0), Vec.of(0,1,0));
+        }
+        else if(t < 71.75)
+        {
+            graphics_state.camera_transform = Mat4.look_at(Vec.of(translateX+50-roverSlowdown, translateY, 3-translateZ), Vec.of(translateX-roverSlowdown, translateY, -translateZ), Vec.of(0,0,1));        
+        }
+        else if(t < 92)
+        {
+           if(t < 90.5)
+           {
+                graphics_state.camera_transform = Mat4.look_at(Vec.of(translateX+50 -1.8*(t - 71.75) - roverSlowdown, translateY, 3 - translateZ), Vec.of(translateX-roverSlowdown, translateY, -translateZ), Vec.of(0,0,1));
+           }
+           else
+           {
+                   graphics_state.camera_transform = Mat4.look_at(Vec.of(translateX+50 -1.8*(90.5 - 71.75) - roverSlowdown, translateY, 3 - translateZ), Vec.of(translateX-roverSlowdown, translateY, -translateZ), Vec.of(0,0,1));
+           }
+        }
+        else
+        {
+            graphics_state.camera_transform = Mat4.look_at(Vec.of(0, 0, -25), Vec.of(0, 0, 0), Vec.of(0,1,0));
+        }
+        
+
+        if(t > 2.25 && t < 2.28)
+        {
+            var countdown = new Audio('assets/countdown.mp3');
+            countdown.play();
+        }
+
+        if(t > 3 && t < 3.03)
+        {
+            var firstRocket = new Audio('assets/firstRocket.mp3');
+            firstRocket.play();
+        }
+
+        if((t > 43.7 && t < 43.73) || (t > 49.9 && t < 49.93))
+        {
+            var hatch = new Audio('assets/hatch.mp3');
+            hatch.play();
+
+            var mid = new Audio('assets/midRocket.mp3');
+            mid.play();
+        }
+
+        if(t > 57.1 && t < 57.13)
+        {
+            var next = new Audio('assets/nextRocket.mp3');
+            next.play();
+        }
+        
+
+        if(t > 59.1 && t < 59.13)
+        {
+             var click = new Audio('assets/click.mp3');
+             click.play();
+        }
+
+        if(t > 64.5 && t < 64.53)
+        {
+                var bop = new Audio('assets/bop.mp3');
+                bop.play();
+        }
+
+        if(t > 59.7 && t < 59.74)
+        {
+                var tinyRocket = new Audio('assets/tinyRocket.mp3');
+                tinyRocket.play();
+        }
+
+        if(t > 76.75 && t < 76.78)
+        {
+                var smallRocket = new Audio('assets/smallRocket.mp3');
+                smallRocket.play();
+        }
+
+
+        if(t > 87 && t < 87.03)
+        {
+             var eagle = new Audio('assets/eagle.mp3');
+             eagle.play();
+        }
+
+        
+        //nose cone
+        var addedSpeedUpTop;
+        if(t >= 50 && t < 54)
+        {
+            addedSpeedUpTop = 2*(t - 50);
+        }
+        else if(t < 50)
+        {
+            addedSpeedUpTop = 0;
+        }
+        else
+        {
+            addedSpeedUpTop = 8;
+        }
+
+        var subSpeedUpTop;
+        if(t >= 56.5 && t < 59.2)
+        {
+            subSpeedUpTop = -2*(t - 56.5);
+        }
+        else if(t < 56.5)
+        {
+            subSpeedUpTop = 0;
+        }
+        else
+        {
+            subSpeedUpTop = -5.4;
+        }
+        
+        
+        var rotateTop;
+        var rotatePos;
+        if(t > 54.25)
+        {
+            rotatePos = 12.5;
+            if(1/3*(t-54.25)*Math.PI <= Math.PI)
+            {
+                rotateTop = 1/3*(t-54.25)*Math.PI;
+            }
+            else
+            {
+                rotateTop = Math.PI;
+            }
+        }
+        else
+        {
+            rotatePos = 0;
+            rotateTop = 0;
+        }
+
+        var rotateY;
+        var roverRotate;
+        if(t > 67)
+        {
+            roverRotate = 8.75;
+            if(1/4*(t-67)*Math.PI/2 <= Math.PI/2)
+            {
+                rotateY = 1/4*(t-67)*Math.PI/2;
+            }
+            else
+            {
+                rotateY = Math.PI/2;
+            }
+        }
+        else
+        {
+            rotateY = 0;
+            roverRotate = 0;
+        }
+
+        //PARTICLES
+        if(t > 8 && t < 42)
+        {
+            this.displayParticles(graphics_state, translateX, translateY, translateZ, rotate, t);
+        }
+
+        if(t < 70)
+        {
+        this.shapes.cone.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX + addedSpeedUpTop + rotatePos + subSpeedUpTop, translateY, 0)))
+        .times(Mat4.rotation(rotate - rotateTop, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, 16 - rotatePos, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of(.89, .89, 2))),
+        this.shape_materials['metal']
+        );
+
+        this.shapes.myShape.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX + addedSpeedUpTop + rotatePos + subSpeedUpTop, translateY, 0)))
+        .times(Mat4.rotation(rotate - rotateTop, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, 14.5 - rotatePos, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of((1 + 1/3), (1 + 1/3), 1.5))),
+        this.shape_materials['launch']
+        );
+
+        this.shapes.cylinder.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX + addedSpeedUpTop + rotatePos + subSpeedUpTop, translateY, 0)))
+        .times(Mat4.rotation(rotate - rotateTop, Vec.of(0, 0, -1)))
+        .times(Mat4.rotation(Math.PI/3, Vec.of(0, 1, 0)))
+        .times(Mat4.translation(Vec.of(0, 12.5 - rotatePos, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of((1 + 1/3), (1 + 1/3), 2))),
+        this.shape_materials['rocketSide']
+        );
+
+        this.shapes.circle.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX + addedSpeedUpTop + rotatePos + subSpeedUpTop, translateY, 0)))
+        .times(Mat4.rotation(rotate - rotateTop, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, 16 - rotatePos, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of(.89, .89, 4))),
+        this.shape_materials['metal']
+        );
+
+        this.shapes.circle.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX + addedSpeedUpTop + rotatePos + subSpeedUpTop, translateY, 0)))
+        .times(Mat4.rotation(rotate - rotateTop, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, 10.5 - rotatePos, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of(1 + 1/3, 1 + 1/3, 4))),
+        this.shape_materials['metal']
+        );
+
+        this.shapes.cone.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX + addedSpeedUpTop + rotatePos + subSpeedUpTop, translateY, 0)))
+        .times(Mat4.rotation(rotate - rotateTop, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, 10 - rotatePos, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of(1, 1, 2))),
+        this.shape_materials['metalStripes']
+        );
+
+        this.shapes.circle.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX + addedSpeedUpTop + rotatePos + subSpeedUpTop, translateY, 0)))
+        .times(Mat4.rotation(rotate - rotateTop, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, 14.5 - rotatePos, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of((1 + 1/3), (1 + 1/3), 4))),
+        this.shape_materials['metal']
+        );
+        }
+
+        if(t < 65)
+        {
+            this.shapes.cone.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(translateX - secondBreak, translateY, 0)))
+            .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+            .times(Mat4.translation(Vec.of(0, 7.25, 0)))
+            .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+            .times(Mat4.scale(Vec.of(1.5, 1.5, 2))),
+            this.shape_materials['metalStripes']
+            );
+
+            this.shapes.myShapeTwo.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(translateX - secondBreak, translateY, 0)))
+            .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+            .times(Mat4.translation(Vec.of(0, 8, 0)))
+            .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+            .times(Mat4.scale(Vec.of(2, 2, 2.5))),
+            this.shape_materials['metal']
+            );
+        }
+
+        //body, shaft
+       if(t < 50)
+       {
+        this.shapes.cylinder.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX - firstBreak, translateY, 0)))
+        .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+        .times(Mat4.rotation(Math.PI/3, Vec.of(0, 1, 0)))
+        .times(Mat4.translation(Vec.of(0, 0, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of(2, 2, 8))),
+        this.shape_materials['rocketSide']
+        );
+
+        this.shapes.circle.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX - firstBreak, translateY, 0)))
+        .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, -8, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of(2, 2, 4))),
+        this.shape_materials['metal']
+        );
+
+        this.shapes.circle.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX - firstBreak, translateY, 0)))
+        .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, 8, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of(2, 2, 4))),
+        this.shape_materials['metal']
+        );
+    
+        this.shapes.cone.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX - firstBreak, translateY, 0)))
+        .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, -9, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of(2, 2, 5))),
+        this.shape_materials['metalStripes']
+        );
+
+        //stabilizers
+        for(let i = 0; i < 4; i++)
+        {
+            this.shapes.box.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(translateX - firstBreak, translateY, 0)))
+            .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+            .times(Mat4.rotation(Math.PI/2 * i, Vec.of(0, 1, 0)))
+            .times(Mat4.translation(Vec.of(0, -5.75, 2.45)))
+            .times(Mat4.rotation(Math.PI/2, Vec.of(0, 1, 0)))
+            .times(Mat4.scale(Vec.of(0.5, 2, 0.1))),
+            this.shape_materials['metal']
+            );
+
+            this.shapes.box.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(translateX - firstBreak, translateY, 0)))
+            .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+            .times(Mat4.rotation(Math.PI/2 * i, Vec.of(0, 1, 0)))
+            .times(Mat4.translation(Vec.of(0, -7.75, 3.45)))
+            .times(Mat4.rotation(Math.PI/2, Vec.of(0, 1, 0)))
+            .times(Mat4.scale(Vec.of(0.5, 2, 0.1))),
+            this.shape_materials['metal']
+            );
+
+            this.shapes.prism.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(translateX - firstBreak, translateY, 0)))
+            .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+            .times(Mat4.rotation(Math.PI/2 * i, Vec.of(0, 1, 0)))
+            .times(Mat4.translation(Vec.of(0, -5.75, 2.95)))
+            .times(Mat4.rotation(-Math.PI/2, Vec.of(0, 1, 0)))
+            .times(Mat4.scale(Vec.of(1, 2, 0.1))),
+            this.plastic.override({color: this.black})
+            );
+        }
+       }
+       
+        //rover
+        this.shapes.myShape.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX + roverRotate - roverSlowdown, translateY, -translateZ)))
+        .times(Mat4.rotation(rotateY, Vec.of(0, -1, 0)))
+        .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, 8.75 - roverRotate, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of(1, 1, 1.25))),
+        this.shape_materials['gold']
+        );
+
+        for(let i = 0; i < 4; i++)
+        {
+            this.shapes.box.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(translateX + roverRotate - roverSlowdown, translateY, -translateZ)))
+            .times(Mat4.rotation(rotateY, Vec.of(0, -1, 0)))
+            .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+            .times(Mat4.rotation(Math.PI/2 * i, Vec.of(0, 1, 0)))
+            .times(Mat4.translation(Vec.of(0, 8.694 - roverRotate, 1.265)))
+            //.times(Mat4.rotation(Math.PI, Vec.of(1, 0, 0)))
+            .times(Mat4.scale(Vec.of(0.1, 0.625, 0.05))),
+            this.shape_materials['gold']
+            );
+
+            this.shapes.box.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(translateX + roverRotate - roverSlowdown, translateY, -translateZ)))
+            .times(Mat4.rotation(rotateY, Vec.of(0, -1, 0)))
+            .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+            .times(Mat4.rotation(Math.PI/2 * i, Vec.of(0, 1, 0)))
+            .times(Mat4.translation(Vec.of(0, 9.0345 - roverRotate, 1.1075)))
+            .times(Mat4.rotation(Math.PI/16, Vec.of(1, 0, 0)))
+            .times(Mat4.scale(Vec.of(0.1, 0.3, 0.05))),
+            this.shape_materials['gold']
+            );
+
+            this.shapes.circle.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(translateX + roverRotate - roverSlowdown, translateY, -translateZ)))
+            .times(Mat4.rotation(rotateY, Vec.of(0, -1, 0)))
+            .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+            .times(Mat4.rotation(Math.PI/2 * i, Vec.of(0, 1, 0)))
+            .times(Mat4.translation(Vec.of(0, 8.0675 - roverRotate, 1.275)))
+            .times(Mat4.rotation(Math.PI/2, Vec.of(1, 0, 0)))
+            .times(Mat4.scale(Vec.of(0.2, 0.2, 1))),
+            this.shape_materials['gold']
+            );
+        }
+
+        this.shapes.cone.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX + roverRotate - roverSlowdown, translateY, -translateZ)))
+        .times(Mat4.rotation(rotateY, Vec.of(0, -1, 0)))
+        .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, 8.625 - roverRotate, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0)))
+        .times(Mat4.scale(Vec.of(.4, .4, 1))),
+        this.shape_materials['metalStripes']
+        );
+
+        this.shapes.cone.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX + roverRotate - roverSlowdown, translateY, -translateZ)))
+        .times(Mat4.rotation(rotateY, Vec.of(0, -1, 0)))
+        .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, 10.25 - roverRotate, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(1, 0, 0)))
+        .times(Mat4.scale(Vec.of(.3, .3, 1.5))),
+        this.shape_materials['launch']
+        );
+
+        this.shapes.circle.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(translateX + roverRotate - roverSlowdown, translateY, -translateZ)))
+        .times(Mat4.rotation(rotateY, Vec.of(0, -1, 0)))
+        .times(Mat4.rotation(rotate, Vec.of(0, 0, -1)))
+        .times(Mat4.translation(Vec.of(0, 10.001 - roverRotate, 0)))
+        .times(Mat4.rotation(Math.PI/2, Vec.of(1, 0, 0)))
+        .times(Mat4.scale(Vec.of(.25, .25, 1))),
+        this.shape_materials['metal']
+        );
+
+        if(t > 67.5)
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(1100, 900, - translateZ)))
+            .times(Mat4.rotation(Math.PI/2, Vec.of(1, 0, 0)))
+            .times(Mat4.rotation(Math.PI/2, Vec.of(0, 1, 0)))
+            .times(Mat4.scale(Vec.of(500, 500, 1))),
+            this.shape_materials['earth']
+            );   
+        }
+    }
+
+    build_arm(graphics_state, deg, t)
+    {
+      if(t < 42)
+      {
+
+              var armRotateOne;
+              if(t > 8 && t < 9)
+              {
+                      armRotateOne = Math.PI/2*(t-8);
+              }
+              else if(t > 9)
+              {
+                      armRotateOne = Math.PI/2;
+              }
+              else
+              {
+                      armRotateOne = 0;
+              }
+
+        let m = Mat4.identity();
+        {
+             m = m.times(Mat4.translation(Vec.of(-6, -9.25, 0)));
+            this.shapes.box.draw(
+                graphics_state,
+                m.times(Mat4.scale(Vec.of(0.5, 0.5, 0.5))),
+                this.shape_materials['crate']);
+            for (var i = 0; i < 22; ++i) {
+                 m = m.times(Mat4.translation(Vec.of(-0.5, 0.5, 0)))
+                    .times(Mat4.rotation(0.05 * deg, Vec.of(0, 0, 1)))
+                    .times(Mat4.translation(Vec.of(0.5, 0.5, 0)));
+                this.shapes.box.draw(
+                    graphics_state,
+                    m.times(Mat4.scale(Vec.of(0.5, 0.5, 0.5))),
+                    this.shape_materials['crate']);
+
+                    if(i == 11)
+                    {
+                       for(var j = 0; j < 2; j++)
+                       {
+                          var mult = 1;
+                          if(j == 0)
+                          {
+                              mult = -1;
+                          }
+                          
+                           let n = m.times(Mat4.translation(Vec.of(.5, 0, mult*.5))).times(Mat4.rotation(armRotateOne, Vec.of(0, mult*-1, 0)));
+
+                           n = n.times(Mat4.translation(Vec.of(.5, 0, mult*2)));
+                           this.shapes.box.draw(
+                                graphics_state,
+                                n.times(Mat4.scale(Vec.of(0.5, 0.5, 2))),
+                                this.shape_materials['crate']
+                                );
+                           
+                           n = n.times(Mat4.translation(Vec.of(2.5, 0, mult*2.5))).times(Mat4.rotation(Math.PI/2, Vec.of(0,1,0)));
+                           this.shapes.box.draw(
+                                graphics_state,
+                                n.times(Mat4.scale(Vec.of(0.5, 0.5, 2))),
+                                this.shape_materials['crate']
+                                );
+
+                           n = n.times(Mat4.translation(Vec.of(mult*1.75, 0, mult*mult*2.5))).times(Mat4.rotation(Math.PI/2, Vec.of(0,1,0)));
+                           this.shapes.box.draw(
+                                graphics_state,
+                                n.times(Mat4.scale(Vec.of(0.5, 0.5, 1.25))),
+                                this.shape_materials['crate']
+                                );
+                         
+                       }
+                    }
+            }
+            this.shapes.box.draw(graphics_state,
+                m.times(Mat4.translation(Vec.of(2.0825, 1, 0))).times(Mat4.scale(Vec.of(2.5825, 0.5, 0.5))),
+                this.shape_materials['crate']);
+        }
+      }
+      
+    }
+
+    build_background(graphics_state, t) {
+        let m = Mat4.identity();
+        
+        if (t < 42)
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(350, 571, -200)))
+            .times(Mat4.scale(Vec.of(700, 750, 1))),
+            this.shape_materials['sky']
+            );
+
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(0, -9.75, 0)))
+             .times(Mat4.rotation(Math.PI/2, Vec.of(1, 0, 0)))
+             .times(Mat4.scale(Vec.of(200, 200, 1))),
+            this.shape_materials['grass']
+            );
+
+            this.shapes.circle.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(0, -9.7, 0)))
+            .times(Mat4.scale(Vec.of(15, 1, 15)))
+            .times(Mat4.rotation(Math.PI/2, Vec.of(-1, 0, 0))),
+            this.shape_materials['launch']
+            );
+        }
+        else 
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(350, 571, -200)))
+            .times(Mat4.scale(Vec.of(700, 750, 1))),
+            this.plastic.override({color: this.black})
+            );
+        }
+
+        
+        if(t < 45)
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(1800, 1100, -250)))
+            .times(Mat4.rotation(Math.PI/2, Vec.of(1, 0, 0)))
+            .times(Mat4.rotation(Math.PI/2, Vec.of(0, 1, 0)))
+            .times(Mat4.scale(Vec.of(100, 100, 1))),
+            this.shape_materials['moonDistant']
+            );    
+        }
+
+        this.shapes.square.draw(
+        graphics_state,
+        m.times(Mat4.translation(Vec.of(1800, 1100, -1750)))
+        .times(Mat4.scale(Vec.of(256, 256, 1))),
+        this.shape_materials['earth']
+        );
+        if(t > 60)
+        {
+            this.shapes.circle.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(2400, 1100, -750)))
+            .times(Mat4.scale(Vec.of(1024, 1024, 1))),
+            this.shape_materials['moon']
+            );   
+        }
+        if(t > 88)
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(0, 0, -5)))
+            .times(Mat4.rotation(Math.PI, Vec.of(0, 1, 0)))
+            .times(Mat4.rotation(2*Math.PI, Vec.of(1, 0, 0)))
+             .times(Mat4.scale(Vec.of(10, 10, 1))),
+            this.plastic.override({color: this.black})
+            );
+
+        }
+    }
+
+    build_scoreboard(graphics_state, t)
+    {
+        var x = 30, y = 0, z = -10;
+        let m = Mat4.identity();
+        if(t < 4)
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(x, y, z)))
+            .times(Mat4.rotation(Math.atan(2/5), Vec.of(-1,0,0)))
+            .times(Mat4.scale(Vec.of(6, 6, 1))),
+            this.shape_materials['five']
+            );
+        }
+        else if(t < 5)
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(x, y, z)))
+            .times(Mat4.rotation(Math.atan(2/5), Vec.of(-1,0,0)))
+            .times(Mat4.scale(Vec.of(6, 6, 1))),
+            this.shape_materials['four']
+            );
+        }
+        else if(t < 6)
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(x, y, z)))
+            .times(Mat4.rotation(Math.atan(2/5), Vec.of(-1,0,0)))
+            .times(Mat4.scale(Vec.of(6, 6, 1))),
+            this.shape_materials['three']
+            );
+        }
+        else if(t < 7)
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(x, y, z)))
+            .times(Mat4.rotation(Math.atan(2/5), Vec.of(-1,0,0)))
+            .times(Mat4.scale(Vec.of(6, 6, 1))),
+            this.shape_materials['two']
+            );
+        }
+        else if(t < 8)
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(x, y, z)))
+            .times(Mat4.rotation(Math.atan(2/5), Vec.of(-1,0,0)))
+            .times(Mat4.scale(Vec.of(6, 6, 1))),
+            this.shape_materials['one']
+            );
+        } 
+        else if(t < 16)
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(x, y, z)))
+            .times(Mat4.rotation(Math.atan(2/5), Vec.of(-1,0,0)))
+            .times(Mat4.scale(Vec.of(6, 6, 1))),
+            this.shape_materials['zero']
+            );
+        }
+        if(t < 16)
+        {
+            this.shapes.square.draw(
+            graphics_state,
+            m.times(Mat4.translation(Vec.of(x-58, y, z)))
+            .times(Mat4.rotation(Math.atan(2/5), Vec.of(-1,0,0)))
+            .times(Mat4.scale(Vec.of(20, 20, 1))),
+            this.shape_materials['text']
+            );
+        }
+        
+    }
+
+    display(graphics_state) {
+        // Use the lights stored in this.lights.
+        graphics_state.lights = this.lights;
+               
+        // Find how much time has passed in seconds, and use that to place shapes.  
+        if (this.start && !this.paused && this.timeBool)
+        {
+            this.t += (graphics_state.animation_delta_time / 1000)*100;
+        }
+        
+        if(this.start && !this.paused && !this.timeBool)
+        {
+            this.t += (graphics_state.animation_delta_time / 1000);
+        }
+        const t = this.t;
+
+        this.timeBool = false;
+
+        // Draw some demo textured shapes
+        /*let spacing = 6;
+        let m = Mat4.translation(Vec.of(-1 * (spacing / 2) * (this.shape_count - 1), 0, 0));
+        for (let k in this.shapes) {
+            this.shapes[k].draw(
+                graphics_state,
+                m.times(Mat4.rotation(t, Vec.of(0, 1, 0))),
+                this.shape_materials[k] || this.plastic);
+            m = m.times(Mat4.translation(Vec.of(spacing, 0, 0)));
+        }
+        */
+        this.build_background(graphics_state, t);
+
+        var translateSub = 8;
+        var rotateSub = 18;
+        var straightSub = 38;
+        var breakSub = 42;
+        const deg = Math.abs(Math.cos(this.t))/3;
+        if(t < Math.PI * 2.5)
+        {
+            this.build_arm(graphics_state, 0, t);
+        }
+        else if(t < Math.PI*3)
+        {
+            this.build_arm(graphics_state, deg, t);
+        }
+        else
+        {
+            this.build_arm(graphics_state, 1/3, t);
+        }
+        
+        this.build_scoreboard(graphics_state, t);
+        
+        if(t < translateSub)
+        {
+            this.build_rocket(graphics_state, 0, 0, 0, 0, t, translateSub, rotateSub, straightSub, breakSub);
+        }
+        else if(t < rotateSub)
+        {
+            this.build_rocket(graphics_state, 1, 0, 0, 0, t, translateSub, rotateSub, straightSub, breakSub);
+        }
+        else if(t < straightSub)
+        {
+            this.build_rocket(graphics_state, 1, 1, 0, 0, t, translateSub, rotateSub, straightSub, breakSub);
+        }
+        else if( t < breakSub)
+        {
+            this.build_rocket(graphics_state, 1, 1, 1, 0, t, translateSub, rotateSub, straightSub, breakSub);
+        }
+        else
+        {
+            this.build_rocket(graphics_state, 1, 1, 1, 1, t, translateSub, rotateSub, straightSub, breakSub);
+        }
+    }
+}
+
+window.Rocket_Simulation = window.classes.Rocket_Simulation = Rocket_Simulation;
